@@ -86,6 +86,26 @@
   <div class="who-buttons" id="whoButtons"></div>
 </dialog>
 
+<dialog id="addDialog">
+  <h2>Add a block</h2>
+  <form id="addForm" method="dialog">
+    <label>Type
+      <select name="type"><option value="group">Group plan</option><option value="me">Just me (busy)</option></select>
+    </label>
+    <label>Title <input name="what" maxlength="80" required placeholder="Dinner at Kinton"></label>
+    <label>Date <input name="date" type="date" required></label>
+    <div class="row">
+      <label>Start <input name="start" type="time" required value="18:00"></label>
+      <label>End <input name="end" type="time" required value="20:00"></label>
+    </div>
+    <p class="err" id="addErr"></p>
+    <div class="row">
+      <button type="button" id="addCancel">Cancel</button>
+      <button class="primary" id="addSave">Save</button>
+    </div>
+  </form>
+</dialog>
+
 <script type="module">
 // ---- Config: fill these in (see README) ----
 const PEOPLE = [
@@ -212,13 +232,92 @@ function render() {
     for (const p of PEOPLE)
       for (const b of mergeIntervals(clip(busyFor(p.id) ?? [], range.start, range.end)))
         col.append(place(div('busy', p.color), b, range));
+    for (const b of state.blocks) {
+      const [iv] = clip([b], range.start, range.end);
+      if (!iv) continue;
+      const el = place(div(b.who === 'group' ? 'group' : 'label', person(b.who)?.color), iv, range);
+      el.textContent = b.title;
+      el.title = b.who === 'group' ? b.title : `${person(b.who)?.name}: ${b.title}`;
+      if (b.who === 'group' || b.who === state.me) el.onclick = () => removeBlock(b);
+      col.append(el);
+    }
     cells.push(col);
   }
   grid.replaceChildren(...cells);
 }
 
+// ---- Shared blocks (Firestore) ----
+const SDK = 'https://www.gstatic.com/firebasejs/10.12.2/';
+let fs = null, unsubscribe = null;
+
+async function initFirebase() {
+  if (!FIREBASE_CONFIG.projectId) {
+    $('addBtn').disabled = true;
+    setBanner('blocks', 'Add the Firebase config in index.html to enable plans.');
+    return;
+  }
+  const [{ initializeApp }, F] = await Promise.all([import(SDK + 'firebase-app.js'), import(SDK + 'firebase-firestore.js')]);
+  fs = { ...F, db: F.getFirestore(initializeApp(FIREBASE_CONFIG)) };
+}
+
+// ponytail: loads every block that starts before the view ends (old ones included); add a lower bound if it ever gets slow
+function subscribeBlocks() {
+  if (!fs) return;
+  unsubscribe?.();
+  const range = visibleRange();
+  const q = fs.query(fs.collection(fs.db, 'blocks'), fs.where('start', '<', fs.Timestamp.fromMillis(range.end)));
+  unsubscribe = fs.onSnapshot(q, snap => {
+    setBanner('blocks', null);
+    state.blocks = snap.docs.map(d => {
+      const { who, title, start, end } = d.data();
+      return { id: d.id, who, title, start: start.toMillis(), end: end.toMillis() };
+    }).filter(b => b.end > range.start);
+    render();
+  }, () => setBanner('blocks', "Couldn't load plans."));
+}
+
+async function removeBlock(b) {
+  if (!confirm(`Delete “${b.title}”?`)) return;
+  try { await fs.deleteDoc(fs.doc(fs.db, 'blocks', b.id)); }
+  catch { alert("Couldn't delete — try again."); }
+}
+
+function openAdd() {
+  const f = $('addForm');
+  f.date.value = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
+  $('addErr').textContent = '';
+  $('addDialog').showModal();
+}
+
+$('addForm').onsubmit = async e => {
+  e.preventDefault();
+  const f = e.target, title = f.what.value.trim();
+  const start = new Date(`${f.date.value}T${f.start.value}`);
+  let end = new Date(`${f.date.value}T${f.end.value}`);
+  if (f.end.value === '00:00') end = addDays(end, 1); // "until midnight"
+  if (!title) return $('addErr').textContent = 'Add a title.';
+  if (!(end > start)) return $('addErr').textContent = 'End must be after start.';
+  if (f.type.value === 'me' && !state.me) return pickWho();
+  $('addSave').disabled = true;
+  try {
+    await fs.addDoc(fs.collection(fs.db, 'blocks'), {
+      who: f.type.value === 'group' ? 'group' : state.me,
+      title, start: fs.Timestamp.fromDate(start), end: fs.Timestamp.fromDate(end),
+    });
+    f.what.value = '';
+    $('addDialog').close();
+  } catch {
+    $('addErr').textContent = "Couldn't save — try again.";
+  } finally {
+    $('addSave').disabled = false;
+  }
+};
+$('addCancel').onclick = () => $('addDialog').close();
+$('addBtn').onclick = openAdd;
+
 async function refresh() {
   render();
+  subscribeBlocks();
   await fetchBusy(visibleRange());
   render();
 }
@@ -248,7 +347,7 @@ phone.addEventListener('change', () => { resetView(); refresh(); });
 
 state.me = person(store('crewcal.me'))?.id ?? null;
 resetView();
-refresh();
+initFirebase().catch(() => setBanner('blocks', "Couldn't load plans.")).then(refresh);
 if (!state.me) pickWho();
 </script>
 </body>

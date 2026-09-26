@@ -1,0 +1,17 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    match /blocks/{id} {
+      allow read, delete: if true;
+      allow create: if request.resource.data.keys().hasOnly(['who','title','start','end'])
+        && request.resource.data.who in ['nathan','soohan','ryan','group']
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 80
+        && request.resource.data.start is timestamp
+        && request.resource.data.end is timestamp
+        && request.resource.data.end > request.resource.data.start;
+      allow update: if false;
+    }
+  }
+}
