@@ -156,7 +156,11 @@ function busyFor(id) {
   return g.concat(state.blocks.filter(b => b.who === id));
 }
 
+let fetchSeq = 0;
+
 async function fetchBusy(range) {
+  const seq = ++fetchSeq;
+  PEOPLE.forEach(p => state.googleBusy[p.id] = null); // unknown until this week loads: no false green
   if (!GOOGLE_API_KEY) {
     PEOPLE.forEach(p => state.googleBusy[p.id] = null);
     setBanner('google', 'Add the Google API key in index.html to load calendars.');
@@ -169,11 +173,12 @@ async function fetchBusy(range) {
       body: JSON.stringify({
         timeMin: new Date(range.start).toISOString(),
         timeMax: new Date(range.end).toISOString(),
-        items: PEOPLE.map(p => ({ id: p.email })),
+        items: PEOPLE.filter(p => p.email).map(p => ({ id: p.email })),
       }),
     });
     if (!res.ok) throw new Error(res.status);
     const { calendars = {} } = await res.json();
+    if (seq !== fetchSeq) return; // a newer week was requested meanwhile
     setBanner('google', null);
     for (const p of PEOPLE) {
       const cal = calendars[p.email];
@@ -182,7 +187,7 @@ async function fetchBusy(range) {
       setBanner('share-' + p.id, ok ? null : `${p.name}'s calendar isn't shared yet.`);
     }
   } catch {
-    PEOPLE.forEach(p => state.googleBusy[p.id] = null);
+    if (seq !== fetchSeq) return;
     setBanner('google', "Couldn't reach Google Calendar.");
   }
 }
@@ -316,10 +321,12 @@ $('addCancel').onclick = () => $('addDialog').close();
 $('addBtn').onclick = openAdd;
 
 async function refresh() {
+  const seq = fetchSeq + 1;
+  const loading = fetchBusy(visibleRange()); // clears busy data synchronously
   render();
   subscribeBlocks();
-  await fetchBusy(visibleRange());
-  render();
+  await loading;
+  if (seq === fetchSeq) render();
 }
 
 function resetView() { state.viewStart = phone.matches ? startOfDay(new Date()) : mondayOf(new Date()); }
