@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crew Calendar</title>
+<style>
+  :root {
+    --bg: #fbfaf7; --panel: #ffffff; --ink: #1d1d1f; --muted: #6e6e73;
+    --line: #e6e3dc; --free: rgba(46, 204, 113, .22); --accent: #1d1d1f;
+    --hour: 44px; color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141414; --panel: #1c1c1e; --ink: #f2f2f2; --muted: #9a9aa0;
+      --line: #2c2c2e; --free: rgba(46, 204, 113, .18); --accent: #f2f2f2;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+           padding: 12px 16px; position: sticky; top: 0; z-index: 5;
+           background: var(--bg); border-bottom: 1px solid var(--line); }
+  h1 { font-size: 17px; margin: 0 8px 0 0; }
+  #range { font-weight: 600; min-width: 9em; }
+  .spacer { flex: 1; }
+  button { font: inherit; color: var(--ink); background: var(--panel);
+           border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  #legend { display: flex; gap: 10px; padding: 8px 16px 0; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+  #legend span::before { content: ""; display: inline-block; width: 10px; height: 10px;
+                         border-radius: 3px; margin-right: 4px; background: var(--c); vertical-align: -1px; }
+  #banners { padding: 0 16px; }
+  .banner { margin-top: 8px; padding: 8px 12px; border-radius: 8px; background: #fff4d6; color: #5c4400; font-size: 13px; }
+  @media (prefers-color-scheme: dark) { .banner { background: #3a3000; color: #ffe08a; } }
+  #grid { display: grid; margin: 12px 16px 24px; background: var(--panel);
+          border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .dayhead { text-align: center; padding: 6px 0; font-weight: 600; font-size: 13px;
+             border-bottom: 1px solid var(--line); border-left: 1px solid var(--line); }
+  .dayhead.today { color: #2e86de; }
+  .times { position: relative; }
+  .times div { height: var(--hour); font-size: 11px; color: var(--muted); text-align: right;
+               padding-right: 6px; transform: translateY(-7px); }
+  .col { position: relative; border-left: 1px solid var(--line);
+         background: repeating-linear-gradient(var(--line) 0 1px, transparent 1px var(--hour)); }
+  .col > div { position: absolute; left: 0; right: 0; }
+  .free { background: var(--free); }
+  .busy { background: var(--c); opacity: .35; border-radius: 4px; left: 2px !important; right: 2px !important; }
+  .label { font-size: 11px; padding: 1px 4px; color: var(--c); font-weight: 600;
+           overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
+  .group { background: var(--accent); color: var(--bg); border-radius: 6px; font-size: 12px; font-weight: 600;
+           padding: 2px 6px; left: 4px !important; right: 4px !important; overflow: hidden; z-index: 2; cursor: pointer; }
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink);
+           padding: 20px; width: min(340px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  dialog h2 { font-size: 16px; margin: 0 0 12px; }
+  dialog form { display: grid; gap: 10px; }
+  dialog label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+  input, select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+                  border-radius: 8px; padding: 7px 8px; width: 100%; }
+  .row { display: flex; gap: 8px; } .row > * { flex: 1; }
+  .who-buttons { display: grid; gap: 8px; }
+  .who-buttons button { border-left: 6px solid var(--c); text-align: left; padding: 10px 12px; }
+  .err { color: #d63031; font-size: 13px; min-height: 1em; margin: 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Crew Calendar</h1>
+  <button id="prev" aria-label="Previous">‹</button>
+  <span id="range"></span>
+  <button id="next" aria-label="Next">›</button>
+  <span class="spacer"></span>
+  <button id="meBtn"></button>
+  <button id="addBtn" class="primary">+ Add</button>
+</header>
+<div id="legend"></div>
+<div id="banners"></div>
+<div id="grid"></div>
+
+<dialog id="whoDialog">
+  <h2>Who are you?</h2>
+  <div class="who-buttons" id="whoButtons"></div>
+</dialog>
+
+<script type="module">
+// ---- Config: fill these in (see README) ----
+const PEOPLE = [
+  { id: 'nathan', name: 'Nathan', email: '', color: '#e4572e' },
+  { id: 'soohan', name: 'Soohan', email: '', color: '#2e86de' },
+  { id: 'ryan',   name: 'Ryan',   email: '', color: '#8e44ad' },
+];
+const GOOGLE_API_KEY = '';
+const FIREBASE_CONFIG = {};
+// ---------------------------------------------
+
+import { mergeIntervals, clip, freeSlots, dayRange } from './slots.js';
+
+const START_HOUR = 8, END_HOUR = 24;
+const phone = matchMedia('(max-width: 699px)');
+const $ = id => document.getElementById(id);
+
+const state = { me: null, viewStart: null, googleBusy: {}, blocks: [] };
+const banners = {};
+
+function store(key, value) {
+  try { return value === undefined ? localStorage.getItem(key) : localStorage.setItem(key, value); }
+  catch { return null; }
+}
+
+function addDays(d, n) { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); }
+function startOfDay(d) { return addDays(d, 0); }
+function mondayOf(d) { return addDays(d, -((d.getDay() + 6) % 7)); }
+function dayCount() { return phone.matches ? 3 : 7; }
+function days() { return Array.from({ length: dayCount() }, (_, i) => addDays(state.viewStart, i)); }
+function visibleRange() {
+  const ds = days();
+  return { start: dayRange(ds[0], START_HOUR, END_HOUR).start, end: dayRange(ds[ds.length - 1], START_HOUR, END_HOUR).end };
+}
+function person(id) { return PEOPLE.find(p => p.id === id); }
+
+function setBanner(key, text) {
+  if (text) banners[key] = text; else delete banners[key];
+  $('banners').replaceChildren(...Object.values(banners).map(t => {
+    const b = document.createElement('div'); b.className = 'banner'; b.textContent = t; return b;
+  }));
+}
+
+// Google busy + that person's own added blocks; null when Google is unknown.
+function busyFor(id) {
+  const g = state.googleBusy[id];
+  if (!g) return null;
+  return g.concat(state.blocks.filter(b => b.who === id));
+}
+
+async function fetchBusy(range) {
+  if (!GOOGLE_API_KEY) {
+    PEOPLE.forEach(p => state.googleBusy[p.id] = null);
+    setBanner('google', 'Add the Google API key in index.html to load calendars.');
+    return;
+  }
+  try {
+    const res = await fetch(`https://www.googleapis.com/calendar/v3/freeBusy?key=${GOOGLE_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        timeMin: new Date(range.start).toISOString(),
+        timeMax: new Date(range.end).toISOString(),
+        items: PEOPLE.map(p => ({ id: p.email })),
+      }),
+    });
+    if (!res.ok) throw new Error(res.status);
+    const { calendars = {} } = await res.json();
+    setBanner('google', null);
+    for (const p of PEOPLE) {
+      const cal = calendars[p.email];
+      const ok = p.email && cal && !cal.errors;
+      state.googleBusy[p.id] = ok ? cal.busy.map(b => ({ start: Date.parse(b.start), end: Date.parse(b.end) })) : null;
+      setBanner('share-' + p.id, ok ? null : `${p.name}'s calendar isn't shared yet.`);
+    }
+  } catch {
+    PEOPLE.forEach(p => state.googleBusy[p.id] = null);
+    setBanner('google', "Couldn't reach Google Calendar.");
+  }
+}
+
+function place(el, iv, range) {
+  const span = range.end - range.start;
+  el.style.top = ((iv.start - range.start) / span * 100) + '%';
+  el.style.height = ((iv.end - iv.start) / span * 100) + '%';
+  return el;
+}
+function div(cls, color) {
+  const el = document.createElement('div');
+  el.className = cls;
+  if (color) el.style.setProperty('--c', color);
+  return el;
+}
+
+function render() {
+  const ds = days(), today = startOfDay(new Date()).getTime();
+  const fmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
+  $('range').textContent = `${fmt.format(ds[0])} – ${fmt.format(ds[ds.length - 1])}`;
+  $('meBtn').textContent = 'You: ' + (person(state.me)?.name ?? '?');
+
+  const grid = $('grid');
+  grid.style.gridTemplateColumns = `44px repeat(${ds.length}, 1fr)`;
+  const cells = [document.createElement('div')];
+  const dayFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric' });
+  for (const d of ds) {
+    const h = div('dayhead' + (d.getTime() === today ? ' today' : ''));
+    h.textContent = dayFmt.format(d);
+    cells.push(h);
+  }
+  const times = div('times');
+  for (let h = START_HOUR; h < END_HOUR; h++) {
+    const t = document.createElement('div');
+    t.textContent = h === START_HOUR ? '' : new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: 'numeric' });
+    times.append(t);
+  }
+  cells.push(times);
+
+  for (const d of ds) {
+    const range = dayRange(d, START_HOUR, END_HOUR);
+    const col = div('col');
+    col.style.height = `calc(var(--hour) * ${END_HOUR - START_HOUR})`;
+    for (const f of freeSlots(PEOPLE.map(p => busyFor(p.id)), range.start, range.end))
+      col.append(place(div('free'), f, range));
+    for (const p of PEOPLE)
+      for (const b of mergeIntervals(clip(busyFor(p.id) ?? [], range.start, range.end)))
+        col.append(place(div('busy', p.color), b, range));
+    cells.push(col);
+  }
+  grid.replaceChildren(...cells);
+}
+
+async function refresh() {
+  render();
+  await fetchBusy(visibleRange());
+  render();
+}
+
+function resetView() { state.viewStart = phone.matches ? startOfDay(new Date()) : mondayOf(new Date()); }
+
+function pickWho() {
+  $('whoButtons').replaceChildren(...PEOPLE.map(p => {
+    const b = document.createElement('button');
+    b.textContent = p.name;
+    b.style.setProperty('--c', p.color);
+    b.onclick = () => { state.me = p.id; store('crewcal.me', p.id); $('whoDialog').close(); render(); };
+    return b;
+  }));
+  $('whoDialog').showModal();
+}
+
+$('legend').replaceChildren(...PEOPLE.map(p => {
+  const s = document.createElement('span'); s.textContent = p.name; s.style.setProperty('--c', p.color); return s;
+}), Object.assign(document.createElement('span'), { textContent: 'All free' }));
+$('legend').lastChild.style.setProperty('--c', 'rgba(46,204,113,.5)');
+
+$('prev').onclick = () => { state.viewStart = addDays(state.viewStart, -dayCount()); refresh(); };
+$('next').onclick = () => { state.viewStart = addDays(state.viewStart, dayCount()); refresh(); };
+$('meBtn').onclick = pickWho;
+phone.addEventListener('change', () => { resetView(); refresh(); });
+
+state.me = person(store('crewcal.me'))?.id ?? null;
+resetView();
+refresh();
+if (!state.me) pickWho();
+</script>
+</body>
+</html>
