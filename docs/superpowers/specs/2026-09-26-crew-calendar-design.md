@@ -17,7 +17,8 @@ blocks. Success: open the link, see "Thursday after 6 we're all free."
 
 ## Architecture
 
-- Single `index.html`, vanilla JS, no build step, hosted on GitHub Pages.
+- `index.html` (vanilla JS, no build step) plus `slots.js` holding the
+  pure "all free" interval logic so it can be tested. Hosted on GitHub Pages.
 - Config block at the top of the file: the three people (name, Google email,
   color), Google API key, Firebase config.
 - **Busy times:** `POST https://www.googleapis.com/calendar/v3/freeBusy?key=…`
@@ -55,8 +56,8 @@ blocks. Success: open the link, see "Thursday after 6 we're all free."
 
 ## Testing
 
-- One `node --test`-free assert script for the "all free" computation
-  (merge busy intervals, invert within the visible hours).
+- `test.mjs`: plain Node assert script over `slots.js` (merge busy
+  intervals, invert within the visible hours). Run with `node test.mjs`.
 - Manual check in the browser: grid renders, add/delete block, banner for an
   unshared calendar, phone width.
 
