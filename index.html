@@ -108,6 +108,9 @@
   .grip::after { content: ""; position: absolute; left: 50%; bottom: 3px; width: 20px; height: 3px; margin-left: -10px;
                  border-radius: 2px; background: currentColor; opacity: 0; transition: opacity .15s; }
   .editable:hover .grip::after, .dragging .grip::after { opacity: .5; }
+  .col { cursor: pointer; }
+  .draft { left: 4px !important; right: 4px !important; border-radius: 8px; z-index: 4;
+           border: 1.5px dashed var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
   .now { height: 2px !important; background: var(--now); z-index: 3; }
   .now::before { content: ""; position: absolute; left: -4px; top: -3px; width: 8px; height: 8px;
                  border-radius: 50%; background: var(--now); }
@@ -240,13 +243,13 @@ const FIREBASE_CONFIG = {
 };
 // ---------------------------------------------
 
-import { mergeIntervals, clip, freeSlots, dayRange, moveInterval, resizeInterval, occurrences, shiftSeries } from './slots.js';
+import { mergeIntervals, clip, freeSlots, dayRange, moveInterval, resizeInterval, occurrences, shiftSeries, slotAt } from './slots.js';
 
 const START_HOUR = 8, END_HOUR = 24;
 const phone = matchMedia('(max-width: 699px)');
 const $ = id => document.getElementById(id);
 
-const state = { me: null, viewStart: null, docs: [], blocks: [] };
+const state = { me: null, viewStart: null, docs: [], blocks: [], draft: null };
 const banners = {};
 
 function store(key, value) {
@@ -322,6 +325,11 @@ function render() {
   for (const d of ds) {
     const range = dayRange(d, START_HOUR, END_HOUR);
     const col = div('col');
+    // Click empty space (or someone's busy layer) -> new 1h block there
+    col.onclick = e => {
+      if (!fs || !['col', 'free', 'busy'].some(c => e.target.classList.contains(c))) return;
+      openDialog(null, slotAt(range, (e.clientY - col.getBoundingClientRect().top) / col.offsetHeight));
+    };
     col.style.height = `calc(var(--hour) * ${END_HOUR - START_HOUR})`;
     for (const f of freeSlots(PEOPLE.map(p => busyFor(p.id)), range.start, range.end))
       col.append(place(div('free'), f, range));
@@ -341,6 +349,8 @@ function render() {
       }
       col.append(el);
     }
+    const [draft] = state.draft ? clip([state.draft], range.start, range.end) : [];
+    if (draft) col.append(place(div('draft'), draft, range));
     const now = Date.now();
     if (now >= range.start && now < range.end) col.append(place(div('now'), { start: now, end: now }, range));
     cells.push(col);
@@ -471,17 +481,20 @@ const hhmm = t => new Date(t).toTimeString().slice(0, 5);
 function openAdd() { openDialog(null); }
 function openEdit(b) { openDialog(b); }
 
-function openDialog(b) {
+function openDialog(b, slot = null) {
   editing = b;
+  state.draft = slot;
+  if (slot) render();
   const f = $('addForm');
   $('addTitle').textContent = b ? 'Edit block' : 'New block';
   $('addDelete').hidden = !b;
   $('addErr').textContent = '';
   f.type.value = b && b.who !== 'group' ? 'me' : 'group';
   f.what.value = b?.title ?? '';
-  f.date.value = new Date(b?.start ?? Date.now()).toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
-  f.start.value = b ? hhmm(b.start) : '18:00';
-  f.end.value = b ? hhmm(b.end) : '20:00';
+  const when = b ?? slot;
+  f.date.value = new Date(when?.start ?? Date.now()).toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
+  f.start.value = when ? hhmm(when.start) : '18:00';
+  f.end.value = when ? hhmm(when.end) : '20:00';
   const r = b?.doc.repeat;
   f.repeat.value = r ? `${r.every}:${r.n}` : '';
   f.ends.value = r?.until ? 'on' : '';
@@ -541,6 +554,7 @@ $('addForm').onsubmit = async e => {
   }
 };
 $('addCancel').onclick = () => $('addDialog').close();
+$('addDialog').addEventListener('close', () => { if (state.draft) { state.draft = null; render(); } });
 $('addBtn').onclick = openAdd;
 
 function refresh() {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mergeIntervals, clip, freeSlots, dayRange, moveInterval, resizeInterval, occurrences, shiftSeries } from './slots.js';
+import { mergeIntervals, clip, freeSlots, dayRange, moveInterval, resizeInterval, occurrences, shiftSeries, slotAt } from './slots.js';
 const I = (s, e) => ({ start: s, end: e });
 
 assert.deepEqual(mergeIntervals([I(5,7), I(1,3), I(3,4)]), [I(1,4), I(5,7)]);   // touching merges
@@ -41,4 +41,10 @@ assert.equal(nov[0].end - nov[0].start, H);
 // "all in series": edited the Oct 19 occurrence to Tue 7-8:30pm -> series start moves to Tue Oct 6, 7pm
 assert.deepEqual(shiftSeries(gym, wk(19, 18), new Date(2026, 9, 20, 19).getTime(), new Date(2026, 9, 20, 20, 30).getTime()),
   { start: wk(6, 19), end: wk(6, 19) + 1.5 * H });
+// click-to-add: 1h slot starting at the half hour clicked, clamped to the day
+const day = dayRange(new Date(2026, 9, 20), 8, 24), HR = 3600000;
+assert.deepEqual(slotAt(day, 0.5), I(day.start + 8 * HR, day.start + 9 * HR));            // 4:00pm
+assert.deepEqual(slotAt(day, (6.4) / 16), I(day.start + 6 * HR, day.start + 7 * HR));      // 2:24pm -> 2:00pm
+assert.deepEqual(slotAt(day, (6.6) / 16), I(day.start + 6.5 * HR, day.start + 7.5 * HR));  // 2:36pm -> 2:30pm
+assert.deepEqual(slotAt(day, 0.999), I(day.start + 15.5 * HR, day.end));                   // 11:30pm -> midnight
 console.log('ok');

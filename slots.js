@@ -79,3 +79,10 @@ export function shiftSeries(series, occStart, newStart, newEnd) {
   const start = moveInterval({ start: series.start, end: series.start }, days, ms).start;
   return { start, end: start + (newEnd - newStart) };
 }
+
+// Click-to-add: `fraction` (0..1) down a day column -> a block starting on that
+// step boundary, `lenMs` long, clamped to the end of the visible day.
+export function slotAt(range, fraction, stepMs = 30 * 60000, lenMs = 60 * 60000) {
+  const start = range.start + Math.floor(fraction * (range.end - range.start) / stepMs) * stepMs;
+  return { start, end: Math.min(start + lenMs, range.end) };
+}
