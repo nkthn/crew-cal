@@ -1,6 +1,6 @@
 # Crew Calendar
 
-Nathan, Soohan and Ryan's week at a glance: everyone's Google busy time
+Nathan, Soohan and Ryan's week at a glance: everyone's busy time
 overlaid, green where all three are free, plus shared plans. Live at https://nkthn.github.io/crew-cal/
 
 ## How it works
