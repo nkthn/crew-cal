@@ -200,8 +200,11 @@
           <option value="month:1">Every month</option>
         </select>
       </label>
-      <label id="untilWrap">Until <input name="until" type="date"></label>
+      <label id="untilWrap">Ends
+        <select name="ends"><option value="">Never</option><option value="on">On a date</option></select>
+      </label>
     </div>
+    <label id="untilDateWrap">Last day <input name="until" type="date"></label>
     <p class="err" id="addErr"></p>
     <div class="row">
       <button type="button" class="btn danger" id="addDelete" hidden>Delete</button>
@@ -481,12 +484,18 @@ function openDialog(b) {
   f.end.value = b ? hhmm(b.end) : '20:00';
   const r = b?.doc.repeat;
   f.repeat.value = r ? `${r.every}:${r.n}` : '';
+  f.ends.value = r?.until ? 'on' : '';
   f.until.value = r?.until ? new Date(r.until).toLocaleDateString('en-CA') : '';
-  $('untilWrap').hidden = !f.repeat.value;
+  syncRepeatFields();
   $('addDialog').showModal();
 }
 
-$('addForm').repeat.onchange = e => $('untilWrap').hidden = !e.target.value;
+function syncRepeatFields() {
+  const f = $('addForm');
+  $('untilWrap').hidden = !f.repeat.value;
+  $('untilDateWrap').hidden = !f.repeat.value || f.ends.value !== 'on';
+}
+$('addForm').repeat.onchange = $('addForm').ends.onchange = syncRepeatFields;
 
 $('addDelete').onclick = async () => {
   const b = editing;
@@ -509,7 +518,8 @@ $('addForm').onsubmit = async e => {
   if (!(end > start)) return $('addErr').textContent = 'End must be after start.';
   if (f.type.value === 'me' && !state.me) return pickWho();
   const [every, n] = f.repeat.value.split(':');
-  const until = f.until.value ? new Date(`${f.until.value}T23:59:59`).getTime() : null;
+  if (f.repeat.value && f.ends.value === 'on' && !f.until.value) return $('addErr').textContent = 'Pick the last day, or set Ends to Never.';
+  const until = f.repeat.value && f.ends.value === 'on' ? new Date(`${f.until.value}T23:59:59`).getTime() : null;
   if (until && until < start) return $('addErr').textContent = 'Repeat end must be after the start.';
   const repeat = every ? { every, n: Number(n), ...(until && { until }) } : null;
   const scope = editing?.doc.repeat ? await askScope() : 'one';
