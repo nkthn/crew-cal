@@ -36,3 +36,16 @@ export function dayRange(date, startHour, endHour) {
   const [y, m, d] = [date.getFullYear(), date.getMonth(), date.getDate()];
   return { start: new Date(y, m, d, startHour).getTime(), end: new Date(y, m, d, endHour).getTime() };
 }
+
+// Shift by whole local days (DST-safe) plus a millisecond offset; duration kept.
+export function moveInterval({ start, end }, days, ms) {
+  const s = new Date(start);
+  s.setDate(s.getDate() + days);
+  const newStart = s.getTime() + ms;
+  return { start: newStart, end: newStart + (end - start) };
+}
+
+// Move the end by ms, never shorter than minMs.
+export function resizeInterval({ start, end }, ms, minMs = 15 * 60000) {
+  return { start, end: Math.max(start + minMs, end + ms) };
+}

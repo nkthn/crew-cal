@@ -99,6 +99,15 @@
            font-size: 12px; font-weight: 600; line-height: 1.25; box-shadow: 0 4px 12px rgba(0,0,0,.18);
            transition: transform .15s; }
   .group:hover { transform: scale(1.02); }
+  .editable { touch-action: none; cursor: grab; }
+  .label.editable:hover { outline: 1.5px dashed var(--c); outline-offset: -3px; border-radius: 8px; }
+  .dragging { cursor: grabbing; z-index: 5 !important; opacity: .9; transition: none !important;
+              box-shadow: 0 14px 32px rgba(0,0,0,.28); border-radius: 8px; }
+  .label.dragging { background: var(--surface); outline: 1.5px solid var(--c); outline-offset: -3px; }
+  .grip { position: absolute; left: 0; right: 0; bottom: 0; height: 10px; cursor: ns-resize; }
+  .grip::after { content: ""; position: absolute; left: 50%; bottom: 3px; width: 20px; height: 3px; margin-left: -10px;
+                 border-radius: 2px; background: currentColor; opacity: 0; transition: opacity .15s; }
+  .editable:hover .grip::after, .dragging .grip::after { opacity: .5; }
   .now { height: 2px !important; background: var(--now); z-index: 3; }
   .now::before { content: ""; position: absolute; left: -4px; top: -3px; width: 8px; height: 8px;
                  border-radius: 50%; background: var(--now); }
@@ -124,6 +133,7 @@
   .btn { height: 44px; border-radius: 12px; font-weight: 600; background: var(--bg); }
   .btn.primary { background: var(--ink); color: var(--bg); }
   .btn:disabled { opacity: .5; }
+  .btn.danger { color: var(--now); flex: 0 0 auto; padding: 0 16px; }
   .who-buttons { display: grid; gap: 8px; }
   .who-buttons button { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 14px;
                         background: var(--bg); font-weight: 600; transition: background .15s; }
@@ -166,7 +176,7 @@
 </dialog>
 
 <dialog id="addDialog">
-  <h2>New block</h2>
+  <h2 id="addTitle">New block</h2>
   <form id="addForm" method="dialog">
     <div class="seg">
       <input type="radio" name="type" id="tGroup" value="group" checked><label for="tGroup">Group plan</label>
@@ -180,6 +190,7 @@
     </div>
     <p class="err" id="addErr"></p>
     <div class="row">
+      <button type="button" class="btn danger" id="addDelete" hidden>Delete</button>
       <button type="button" class="btn" id="addCancel">Cancel</button>
       <button class="btn primary" id="addSave">Save</button>
     </div>
@@ -197,7 +208,7 @@ const GOOGLE_API_KEY = '';
 const FIREBASE_CONFIG = {};
 // ---------------------------------------------
 
-import { mergeIntervals, clip, freeSlots, dayRange } from './slots.js';
+import { mergeIntervals, clip, freeSlots, dayRange, moveInterval, resizeInterval } from './slots.js';
 
 const START_HOUR = 8, END_HOUR = 24;
 const phone = matchMedia('(max-width: 699px)');
@@ -286,6 +297,7 @@ function div(cls, color) {
 }
 
 function render() {
+  if (drag) return; // don't swap elements out from under a drag; onDragEnd re-renders
   const ds = days(), today = startOfDay(new Date()).getTime();
   const first = ds[0], last = ds[ds.length - 1];
   const month = d => d.toLocaleDateString(undefined, { month: 'long' });
@@ -330,7 +342,11 @@ function render() {
       const el = place(div(b.who === 'group' ? 'group' : 'label', person(b.who)?.color), iv, range);
       el.textContent = b.title;
       el.title = b.who === 'group' ? b.title : `${person(b.who)?.name}: ${b.title}`;
-      if (b.who === 'group' || b.who === state.me) el.onclick = () => removeBlock(b);
+      if (b.who === 'group' || b.who === state.me) {
+        el.classList.add('editable');
+        el.append(div('grip'));
+        el.onpointerdown = e => startDrag(e, b, el);
+      }
       col.append(el);
     }
     const now = Date.now();
@@ -370,18 +386,84 @@ function subscribeBlocks() {
   }, () => setBanner('blocks', "Couldn't load plans."));
 }
 
-async function removeBlock(b) {
-  if (!confirm(`Delete “${b.title}”?`)) return;
-  try { await fs.deleteDoc(fs.doc(fs.db, 'blocks', b.id)); }
-  catch { alert("Couldn't delete — try again."); }
+// ---- Drag to move / resize ----
+const SNAP = 15 * 60000;
+let drag = null;
+
+function startDrag(e, b, el) {
+  if (e.button) return;
+  e.preventDefault();
+  const cols = [...document.querySelectorAll('#grid .col')], col = el.parentElement, rect = col.getBoundingClientRect();
+  drag = {
+    b, el, x: e.clientX, y: e.clientY, h0: el.offsetHeight, moved: false,
+    mode: e.target.classList.contains('grip') ? 'resize' : 'move',
+    msPerPx: (END_HOUR - START_HOUR) * 3600000 / rect.height,
+    colW: rect.width, colIdx: cols.indexOf(col), nCols: cols.length,
+  };
+  el.setPointerCapture(e.pointerId);
+  el.onpointermove = onDragMove;
+  el.onpointerup = el.onpointercancel = onDragEnd;
 }
 
-function openAdd() {
+function dragDelta(e) {
+  const ms = Math.round((e.clientY - drag.y) * drag.msPerPx / SNAP) * SNAP;
+  const days = drag.mode === 'move'
+    ? Math.max(-drag.colIdx, Math.min(drag.nCols - 1 - drag.colIdx, Math.round((e.clientX - drag.x) / drag.colW)))
+    : 0;
+  return { ms, days };
+}
+
+function onDragMove(e) {
+  if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 5) return;
+  drag.moved = true;
+  drag.el.classList.add('dragging');
+  const { ms, days } = dragDelta(e);
+  if (drag.mode === 'move') drag.el.style.transform = `translate(${days * drag.colW}px, ${ms / drag.msPerPx}px)`;
+  else drag.el.style.height = Math.max(SNAP / drag.msPerPx, drag.h0 + ms / drag.msPerPx) + 'px';
+}
+
+async function onDragEnd(e) {
+  const { b, el, moved, mode } = drag, { ms, days } = dragDelta(e);
+  el.onpointermove = el.onpointerup = el.onpointercancel = null;
+  drag = null;
+  if (!moved) return openEdit(b);
+  const iv = mode === 'move' ? moveInterval(b, days, ms) : resizeInterval(b, ms);
+  Object.assign(b, iv); // optimistic; the snapshot confirms
+  render();
+  try {
+    await fs.updateDoc(fs.doc(fs.db, 'blocks', b.id), { start: fs.Timestamp.fromMillis(iv.start), end: fs.Timestamp.fromMillis(iv.end) });
+  } catch {
+    setBanner('save', "Couldn't save that change — try again.");
+    subscribeBlocks(); // reload the real data
+  }
+}
+
+// ---- Add / edit dialog ----
+let editing = null;
+const hhmm = t => new Date(t).toTimeString().slice(0, 5);
+
+function openAdd() { openDialog(null); }
+function openEdit(b) { openDialog(b); }
+
+function openDialog(b) {
+  editing = b;
   const f = $('addForm');
-  f.date.value = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
+  $('addTitle').textContent = b ? 'Edit block' : 'New block';
+  $('addDelete').hidden = !b;
   $('addErr').textContent = '';
+  f.type.value = b && b.who !== 'group' ? 'me' : 'group';
+  f.what.value = b?.title ?? '';
+  f.date.value = new Date(b?.start ?? Date.now()).toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
+  f.start.value = b ? hhmm(b.start) : '18:00';
+  f.end.value = b ? hhmm(b.end) : '20:00';
   $('addDialog').showModal();
 }
+
+$('addDelete').onclick = async () => {
+  if (!confirm(`Delete “${editing.title}”?`)) return;
+  try { await fs.deleteDoc(fs.doc(fs.db, 'blocks', editing.id)); $('addDialog').close(); }
+  catch { $('addErr').textContent = "Couldn't delete — try again."; }
+};
 
 $('addForm').onsubmit = async e => {
   e.preventDefault();
@@ -394,10 +476,12 @@ $('addForm').onsubmit = async e => {
   if (f.type.value === 'me' && !state.me) return pickWho();
   $('addSave').disabled = true;
   try {
-    await fs.addDoc(fs.collection(fs.db, 'blocks'), {
+    const data = {
       who: f.type.value === 'group' ? 'group' : state.me,
       title, start: fs.Timestamp.fromDate(start), end: fs.Timestamp.fromDate(end),
-    });
+    };
+    if (editing) await fs.updateDoc(fs.doc(fs.db, 'blocks', editing.id), data);
+    else await fs.addDoc(fs.collection(fs.db, 'blocks'), data);
     f.what.value = '';
     $('addDialog').close();
   } catch {
