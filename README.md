@@ -35,7 +35,7 @@ At the top of the `<script>` in `index.html`:
 
 ```js
 const PEOPLE = [
-  { id: 'nathan', name: 'Nathan', email: 'nathan@gmail.com', color: '#e4572e' },
+  { id: 'nathan', name: 'Nathan', email: 'nathan@gmail.com', color: '#ff5e3a' },
   ...
 ];
 const GOOGLE_API_KEY = 'AIza...';
