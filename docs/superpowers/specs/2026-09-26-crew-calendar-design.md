@@ -1,5 +1,9 @@
 # Crew Calendar — Design
 
+> **Revised 2026-10-15:** Google Calendar was dropped — busy time now comes only from
+> "just me" blocks in Firestore. Blocks can repeat (daily / weekly / every 2 weeks / monthly,
+> optional end date), and edits to a repeating block ask "only this one" or "all in the series".
+
 Date: 2026-09-26
 People: Nathan, Soohan, Ryan
 

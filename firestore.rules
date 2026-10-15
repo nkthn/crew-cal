@@ -2,14 +2,19 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{db}/documents {
     function valid(d) {
-      return d.keys().hasOnly(['who','title','start','end'])
+      return d.keys().hasOnly(['who','title','start','end','repeat','skip'])
         && d.who in ['nathan','soohan','ryan','group']
         && d.title is string
         && d.title.trim().size() > 0
         && d.title.size() <= 80
         && d.start is timestamp
         && d.end is timestamp
-        && d.end > d.start;
+        && d.end > d.start
+        && (!('repeat' in d) || (d.repeat is map
+             && d.repeat.keys().hasOnly(['every','n','until'])
+             && d.repeat.every in ['day','week','month']
+             && d.repeat.n is int && d.repeat.n >= 1 && d.repeat.n <= 4))
+        && (!('skip' in d) || (d.skip is list && d.skip.size() <= 500));
     }
     match /blocks/{id} {
       allow read, delete: if true;

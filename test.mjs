@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mergeIntervals, clip, freeSlots, dayRange, moveInterval, resizeInterval } from './slots.js';
+import { mergeIntervals, clip, freeSlots, dayRange, moveInterval, resizeInterval, occurrences, shiftSeries } from './slots.js';
 const I = (s, e) => ({ start: s, end: e });
 
 assert.deepEqual(mergeIntervals([I(5,7), I(1,3), I(3,4)]), [I(1,4), I(5,7)]);   // touching merges
@@ -23,4 +23,22 @@ assert.equal(new Date(moved.end).getHours(), 21);
 // resize keeps at least 15 minutes
 assert.deepEqual(resizeInterval(I(at(16,19), at(16,21)), 30 * MIN), I(at(16,19), at(16,21,30)));
 assert.deepEqual(resizeInterval(I(at(16,19), at(16,21)), -3 * 60 * MIN), I(at(16,19), at(16,19,15)));
+// --- recurrence ---
+const H = 3600000, wk = (d, h) => new Date(2026, 9, d, h).getTime();      // Oct 2026
+const gym = { start: wk(5, 18), end: wk(5, 19) };                             // Mon Oct 5, 6-7pm
+const starts = (b, f, t) => occurrences(b, f, t).map(o => new Date(o.start).getDate());
+assert.deepEqual(starts(gym, wk(1, 0), wk(31, 0)), [5]);                      // no repeat
+assert.deepEqual(starts({ ...gym, repeat: { every: 'week', n: 1 } }, wk(1, 0), wk(31, 0)), [5, 12, 19, 26]);
+assert.deepEqual(starts({ ...gym, repeat: { every: 'week', n: 2 } }, wk(1, 0), wk(31, 0)), [5, 19]);
+assert.deepEqual(starts({ ...gym, repeat: { every: 'day', n: 1 } }, wk(5, 0), wk(8, 0)), [5, 6, 7]);
+assert.deepEqual(starts({ ...gym, repeat: { every: 'week', n: 1, until: wk(19, 23) } }, wk(1, 0), wk(31, 0)), [5, 12, 19]);
+assert.deepEqual(starts({ ...gym, repeat: { every: 'week', n: 1 }, skip: [wk(12, 18)] }, wk(1, 0), wk(31, 0)), [5, 19, 26]);
+assert.equal(occurrences({ ...gym, repeat: { every: 'month', n: 1 } }, wk(1, 0), new Date(2027, 0, 1).getTime()).length, 3); // Oct, Nov, Dec
+// weekly across the Nov 1 DST change keeps 6pm wall clock
+const nov = occurrences({ ...gym, repeat: { every: 'week', n: 1 } }, new Date(2026, 10, 1).getTime(), new Date(2026, 10, 10).getTime());
+assert.equal(new Date(nov[0].start).getHours(), 18);
+assert.equal(nov[0].end - nov[0].start, H);
+// "all in series": edited the Oct 19 occurrence to Tue 7-8:30pm -> series start moves to Tue Oct 6, 7pm
+assert.deepEqual(shiftSeries(gym, wk(19, 18), new Date(2026, 9, 20, 19).getTime(), new Date(2026, 9, 20, 20, 30).getTime()),
+  { start: wk(6, 19), end: wk(6, 19) + 1.5 * H });
 console.log('ok');

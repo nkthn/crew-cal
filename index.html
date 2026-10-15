@@ -121,6 +121,8 @@
   dialog h2 { font-size: 20px; font-weight: 700; letter-spacing: -.025em; margin: 0 0 18px; }
   dialog form { display: grid; gap: 14px; }
   dialog label { display: grid; gap: 6px; font-size: 12px; font-weight: 500; color: var(--muted); }
+  select { font: inherit; color: var(--ink); background: var(--bg); border: 0; border-radius: 12px; padding: 11px 12px; width: 100%; appearance: none; }
+  [hidden] { display: none !important; }
   input { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid transparent;
           border-radius: 12px; padding: 11px 12px; width: 100%; transition: border-color .15s; }
   input:focus { outline: none; border-color: var(--line-strong); background: var(--surface); }
@@ -188,6 +190,18 @@
       <label>Start <input name="start" type="time" required value="18:00"></label>
       <label>End <input name="end" type="time" required value="20:00"></label>
     </div>
+    <div class="row">
+      <label>Repeat
+        <select name="repeat">
+          <option value="">Never</option>
+          <option value="day:1">Every day</option>
+          <option value="week:1">Every week</option>
+          <option value="week:2">Every 2 weeks</option>
+          <option value="month:1">Every month</option>
+        </select>
+      </label>
+      <label id="untilWrap">Until <input name="until" type="date"></label>
+    </div>
     <p class="err" id="addErr"></p>
     <div class="row">
       <button type="button" class="btn danger" id="addDelete" hidden>Delete</button>
@@ -197,24 +211,32 @@
   </form>
 </dialog>
 
+<dialog id="scopeDialog">
+  <h2>Repeating block</h2>
+  <div class="who-buttons">
+    <button data-scope="one">Only this one</button>
+    <button data-scope="all">All in the series</button>
+    <button data-scope="">Cancel</button>
+  </div>
+</dialog>
+
 <script type="module">
 // ---- Config: fill these in (see README) ----
 const PEOPLE = [
-  { id: 'nathan', name: 'Nathan', email: '', color: '#ff5e3a' },
-  { id: 'soohan', name: 'Soohan', email: '', color: '#2f7bff' },
-  { id: 'ryan',   name: 'Ryan',   email: '', color: '#a259ff' },
+  { id: 'nathan', name: 'Nathan', color: '#ff5e3a' },
+  { id: 'soohan', name: 'Soohan', color: '#2f7bff' },
+  { id: 'ryan',   name: 'Ryan',   color: '#a259ff' },
 ];
-const GOOGLE_API_KEY = '';
 const FIREBASE_CONFIG = {};
 // ---------------------------------------------
 
-import { mergeIntervals, clip, freeSlots, dayRange, moveInterval, resizeInterval } from './slots.js';
+import { mergeIntervals, clip, freeSlots, dayRange, moveInterval, resizeInterval, occurrences, shiftSeries } from './slots.js';
 
 const START_HOUR = 8, END_HOUR = 24;
 const phone = matchMedia('(max-width: 699px)');
 const $ = id => document.getElementById(id);
 
-const state = { me: null, viewStart: null, googleBusy: {}, blocks: [] };
+const state = { me: null, viewStart: null, docs: [], blocks: [] };
 const banners = {};
 
 function store(key, value) {
@@ -240,48 +262,8 @@ function setBanner(key, text) {
   }));
 }
 
-// Google busy + that person's own added blocks; null when Google is unknown.
-function busyFor(id) {
-  const g = state.googleBusy[id];
-  if (!g) return null;
-  return g.concat(state.blocks.filter(b => b.who === id));
-}
-
-let fetchSeq = 0;
-
-async function fetchBusy(range) {
-  const seq = ++fetchSeq;
-  PEOPLE.forEach(p => state.googleBusy[p.id] = null); // unknown until this week loads: no false green
-  if (!GOOGLE_API_KEY) {
-    PEOPLE.forEach(p => state.googleBusy[p.id] = null);
-    setBanner('google', 'Add the Google API key in index.html to load calendars.');
-    return;
-  }
-  try {
-    const res = await fetch(`https://www.googleapis.com/calendar/v3/freeBusy?key=${GOOGLE_API_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        timeMin: new Date(range.start).toISOString(),
-        timeMax: new Date(range.end).toISOString(),
-        items: PEOPLE.filter(p => p.email).map(p => ({ id: p.email })),
-      }),
-    });
-    if (!res.ok) throw new Error(res.status);
-    const { calendars = {} } = await res.json();
-    if (seq !== fetchSeq) return; // a newer week was requested meanwhile
-    setBanner('google', null);
-    for (const p of PEOPLE) {
-      const cal = calendars[p.email];
-      const ok = p.email && cal && !cal.errors;
-      state.googleBusy[p.id] = ok ? cal.busy.map(b => ({ start: Date.parse(b.start), end: Date.parse(b.end) })) : null;
-      setBanner('share-' + p.id, ok ? null : `${p.name}'s calendar isn't shared yet.`);
-    }
-  } catch {
-    if (seq !== fetchSeq) return;
-    setBanner('google', "Couldn't reach Google Calendar.");
-  }
-}
+// A person's busy time = their own "just me" blocks.
+function busyFor(id) { return state.blocks.filter(b => b.who === id); }
 
 function place(el, iv, range) {
   const span = range.end - range.start;
@@ -340,7 +322,7 @@ function render() {
       const [iv] = clip([b], range.start, range.end);
       if (!iv) continue;
       const el = place(div(b.who === 'group' ? 'group' : 'label', person(b.who)?.color), iv, range);
-      el.textContent = b.title;
+      el.textContent = (b.doc.repeat ? '↻ ' : '') + b.title;
       el.title = b.who === 'group' ? b.title : `${person(b.who)?.name}: ${b.title}`;
       if (b.who === 'group' || b.who === state.me) {
         el.classList.add('editable');
@@ -378,12 +360,43 @@ function subscribeBlocks() {
   const q = fs.query(fs.collection(fs.db, 'blocks'), fs.where('start', '<', fs.Timestamp.fromMillis(range.end)));
   unsubscribe = fs.onSnapshot(q, snap => {
     setBanner('blocks', null);
-    state.blocks = snap.docs.map(d => {
-      const { who, title, start, end } = d.data();
-      return { id: d.id, who, title, start: start.toMillis(), end: end.toMillis() };
-    }).filter(b => b.end > range.start);
+    state.docs = snap.docs.map(d => {
+      const { start, end, ...rest } = d.data();
+      return { ...rest, id: d.id, start: start.toMillis(), end: end.toMillis() };
+    });
+    expandBlocks();
     render();
   }, () => setBanner('blocks', "Couldn't load plans."));
+}
+
+// One entry per occurrence on screen; `doc` is the stored block (the series, if repeating).
+function expandBlocks() {
+  const range = visibleRange();
+  state.blocks = state.docs.flatMap(doc =>
+    occurrences(doc, range.start, range.end).map(o => ({ id: doc.id, who: doc.who, title: doc.title, ...o, doc })));
+}
+
+const ts = ms => fs.Timestamp.fromMillis(ms);
+const ref = id => fs.doc(fs.db, 'blocks', id);
+
+function askScope() {
+  return new Promise(resolve => {
+    const dlg = $('scopeDialog');
+    dlg.querySelectorAll('button').forEach(btn => btn.onclick = () => { dlg.close(); resolve(btn.dataset.scope || null); });
+    dlg.oncancel = () => resolve(null);
+    dlg.showModal();
+  });
+}
+
+// Write a change to one occurrence. scope 'one' on a series = skip that date + save a standalone copy.
+async function saveChange(b, scope, fields) {
+  const { repeat, ...rest } = fields;
+  if (!b.doc.repeat) return fs.updateDoc(ref(b.id), { ...rest, ...(repeat !== undefined && { repeat: repeat ?? fs.deleteField() }) });
+  if (scope === 'one') {
+    await fs.addDoc(fs.collection(fs.db, 'blocks'), { who: b.who, title: b.title, start: ts(b.start), end: ts(b.end), ...rest });
+    return fs.updateDoc(ref(b.id), { skip: fs.arrayUnion(b.occ) });
+  }
+  return fs.updateDoc(ref(b.id), { ...rest, ...(repeat !== undefined && { repeat: repeat ?? fs.deleteField() }) });
 }
 
 // ---- Drag to move / resize ----
@@ -428,10 +441,13 @@ async function onDragEnd(e) {
   drag = null;
   if (!moved) return openEdit(b);
   const iv = mode === 'move' ? moveInterval(b, days, ms) : resizeInterval(b, ms);
+  const scope = b.doc.repeat ? await askScope() : 'one';
+  if (!scope) return render();
+  const target = scope === 'all' ? shiftSeries(b.doc, b.occ, iv.start, iv.end) : iv;
   Object.assign(b, iv); // optimistic; the snapshot confirms
   render();
   try {
-    await fs.updateDoc(fs.doc(fs.db, 'blocks', b.id), { start: fs.Timestamp.fromMillis(iv.start), end: fs.Timestamp.fromMillis(iv.end) });
+    await saveChange(b, scope, { start: ts(target.start), end: ts(target.end) });
   } catch {
     setBanner('save', "Couldn't save that change — try again.");
     subscribeBlocks(); // reload the real data
@@ -456,13 +472,24 @@ function openDialog(b) {
   f.date.value = new Date(b?.start ?? Date.now()).toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
   f.start.value = b ? hhmm(b.start) : '18:00';
   f.end.value = b ? hhmm(b.end) : '20:00';
+  const r = b?.doc.repeat;
+  f.repeat.value = r ? `${r.every}:${r.n}` : '';
+  f.until.value = r?.until ? new Date(r.until).toLocaleDateString('en-CA') : '';
+  $('untilWrap').hidden = !f.repeat.value;
   $('addDialog').showModal();
 }
 
+$('addForm').repeat.onchange = e => $('untilWrap').hidden = !e.target.value;
+
 $('addDelete').onclick = async () => {
-  if (!confirm(`Delete “${editing.title}”?`)) return;
-  try { await fs.deleteDoc(fs.doc(fs.db, 'blocks', editing.id)); $('addDialog').close(); }
-  catch { $('addErr').textContent = "Couldn't delete — try again."; }
+  const b = editing;
+  const scope = b.doc.repeat ? await askScope() : (confirm(`Delete “${b.title}”?`) && 'all');
+  if (!scope) return;
+  try {
+    if (scope === 'one') await fs.updateDoc(ref(b.id), { skip: fs.arrayUnion(b.occ) });
+    else await fs.deleteDoc(ref(b.id));
+    $('addDialog').close();
+  } catch { $('addErr').textContent = "Couldn't delete — try again."; }
 };
 
 $('addForm').onsubmit = async e => {
@@ -474,14 +501,20 @@ $('addForm').onsubmit = async e => {
   if (!title) return $('addErr').textContent = 'Add a title.';
   if (!(end > start)) return $('addErr').textContent = 'End must be after start.';
   if (f.type.value === 'me' && !state.me) return pickWho();
+  const [every, n] = f.repeat.value.split(':');
+  const until = f.until.value ? new Date(`${f.until.value}T23:59:59`).getTime() : null;
+  if (until && until < start) return $('addErr').textContent = 'Repeat end must be after the start.';
+  const repeat = every ? { every, n: Number(n), ...(until && { until }) } : null;
+  const scope = editing?.doc.repeat ? await askScope() : 'one';
+  if (!scope) return;
   $('addSave').disabled = true;
   try {
-    const data = {
-      who: f.type.value === 'group' ? 'group' : state.me,
-      title, start: fs.Timestamp.fromDate(start), end: fs.Timestamp.fromDate(end),
-    };
-    if (editing) await fs.updateDoc(fs.doc(fs.db, 'blocks', editing.id), data);
-    else await fs.addDoc(fs.collection(fs.db, 'blocks'), data);
+    const who = f.type.value === 'group' ? 'group' : state.me;
+    const when = scope === 'all' ? shiftSeries(editing.doc, editing.occ, start.getTime(), end.getTime())
+                                 : { start: start.getTime(), end: end.getTime() };
+    const data = { who, title, start: ts(when.start), end: ts(when.end) };
+    if (!editing) await fs.addDoc(fs.collection(fs.db, 'blocks'), { ...data, ...(repeat && { repeat }) });
+    else await saveChange(editing, scope, scope === 'one' && editing.doc.repeat ? data : { ...data, repeat });
     f.what.value = '';
     $('addDialog').close();
   } catch {
@@ -493,13 +526,10 @@ $('addForm').onsubmit = async e => {
 $('addCancel').onclick = () => $('addDialog').close();
 $('addBtn').onclick = openAdd;
 
-async function refresh() {
-  const seq = fetchSeq + 1;
-  const loading = fetchBusy(visibleRange()); // clears busy data synchronously
+function refresh() {
+  expandBlocks();
   render();
   subscribeBlocks();
-  await loading;
-  if (seq === fetchSeq) render();
 }
 
 function resetView() { state.viewStart = phone.matches ? startOfDay(new Date()) : mondayOf(new Date()); }

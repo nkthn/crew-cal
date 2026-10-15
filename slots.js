@@ -49,3 +49,33 @@ export function moveInterval({ start, end }, days, ms) {
 export function resizeInterval({ start, end }, ms, minMs = 15 * 60000) {
   return { start, end: Math.max(start + minMs, end + ms) };
 }
+
+// Expand a block into the occurrences overlapping [from, to).
+// block.repeat = { every: 'day' | 'week' | 'month', n, until? } ; block.skip = [occurrence start ms]
+// Each occurrence is computed from the original start with local Date math, so wall-clock time survives DST.
+// ponytail: monthly on the 29th-31st rolls into the next month (Date overflow); clamp if anyone books those
+export function occurrences(block, from, to) {
+  const dur = block.end - block.start;
+  if (!block.repeat) return block.end > from && block.start < to ? [{ start: block.start, end: block.end, occ: block.start }] : [];
+  const { every, n = 1, until = Infinity } = block.repeat, skip = new Set(block.skip ?? []), out = [];
+  for (let k = 0; k < 5000; k++) {
+    const d = new Date(block.start);
+    if (every === 'day') d.setDate(d.getDate() + k * n);
+    else if (every === 'week') d.setDate(d.getDate() + 7 * k * n);
+    else d.setMonth(d.getMonth() + k * n);
+    const s = d.getTime();
+    if (s >= to || s > until) break;
+    if (s + dur > from && !skip.has(s)) out.push({ start: s, end: s + dur, occ: s });
+  }
+  return out;
+}
+
+// "Edit all in series": one occurrence moved from occStart to newStart..newEnd;
+// shift the series' first start by the same days + time-of-day change.
+export function shiftSeries(series, occStart, newStart, newEnd) {
+  const midnight = t => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const days = Math.round((midnight(newStart) - midnight(occStart)) / 86400000);
+  const ms = (newStart - midnight(newStart)) - (occStart - midnight(occStart));
+  const start = moveInterval({ start: series.start, end: series.start }, days, ms).start;
+  return { start, end: start + (newEnd - newStart) };
+}
